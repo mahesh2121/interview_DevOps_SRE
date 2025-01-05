@@ -1,0 +1,11 @@
+why do we need terraform.tfvars file?
+
+How you  code
+
+know about software is deployed
+
+----
+
+if you do not hard code variable you can set values in terraform.tfvars files(difffernt values per environment). This ways you code doesn't change and you can follow DRY principle
+
+This is also one of the 12 factor appl principel

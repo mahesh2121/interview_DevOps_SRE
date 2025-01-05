@@ -1,0 +1,59 @@
+How is OIDC integrated with kubernetes?
+
+kubernetes application and kubernetes cluster
+
+Benfits:
+
+    centrailzed identity managment
+    simplied integration with exiting identity provider
+    enhanced security with jwt-based authentication
+
+
+Oidc provider setup:
+
+      choose an oidc provider 
+      configurae the provider with a client id,client secret,and redirect urls
+
+kubenetes API configuration:
+
+  add the following flags to kube-apiserver to enable oidc
+
+    --oidc-issuer-url=<oidc-issue-url>
+    --oidc-client-id=<client-id>
+    --oidc-username-claim=<uername-claim>
+    --oidc-groups-claim=<groups-claims>
+
+Authenticalion flow
+
+User authenticate via the oidc provider
+
+    the provider issue the an ID token to the user.
+    Users include the token in the authentication header
+    accessing the kubernetes API
+
+RBAC integration
+
+    define cluster role and cluster rolebinding or role and rolebinding to map oidc-authenticated users and groups to specific permission in k8s
+
+exmaple code
+
+    apiversion: rbac.authorization.k8s.io/v1
+    kind:ClusterRolebinding
+    metadata:
+        name:oidc-admini-binding
+    subjects:
+       -kind: User
+        name: "user@exmaple.com
+        apigroup:rbac.authentication.k8s.io
+    roleref:
+        kind: Clusterole
+        name: Cluster-admin
+        apiGroup: rbac.authentication.k8s.io
+
+verify token
+    kubernetse vertifies the id token's singnature and claims against the oidc providers public keys and configuration this ensure tokens are valid and unaltered.
+    
+
+
+    
+
