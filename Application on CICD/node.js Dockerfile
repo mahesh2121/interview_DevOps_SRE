@@ -1,0 +1,26 @@
+FROM node:18.20.2 AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY yarn.lock ./
+
+RUN yarn install --frozen-lockfile --ignore-scripts
+
+COPY . .
+
+RUN yarn build
+
+FROM node:18.20.2-slim
+
+WORKDIR /app
+
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
+
+EXPOSE 8080
+
+CMD ["node", "dist/main"]
+
+

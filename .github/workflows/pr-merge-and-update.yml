@@ -1,0 +1,171 @@
+# .github/workflows/pr-merge-and-update.yml
+name: PR Merge & Auto-Update
+
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ closed ]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  auto-update-on-merge:
+    # Only run if PR was merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Git
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+
+    - name: Get current version
+      id: current_version
+      run: |
+        # Try to get latest tag, if none exists start with v1.0.0
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+        echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+        echo "Current version: $LATEST_TAG"
+
+    - name: Determine version bump
+      id: version_bump
+      run: |
+        # Check PR labels or commit messages to determine version bump
+        PR_LABELS="${{ toJson(github.event.pull_request.labels.*.name) }}"
+        PR_TITLE="${{ github.event.pull_request.title }}"
+
+        CURRENT="${{ steps.current_version.outputs.latest_tag }}"
+
+        # Remove 'v' prefix for version calculation
+        CURRENT_CLEAN=${CURRENT#v}
+
+        # Split version into parts
+        IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_CLEAN"
+        MAJOR=${VERSION_PARTS[0]:-0}
+        MINOR=${VERSION_PARTS[1]:-0}
+        PATCH=${VERSION_PARTS[2]:-0}
+
+        # Determine bump type based on PR labels or keywords
+        if echo "$PR_LABELS" | grep -q "major" || echo "$PR_TITLE" | grep -iq "breaking\|major"; then
+          NEW_VERSION="v$((MAJOR + 1)).0.0"
+        elif echo "$PR_LABELS" | grep -q "minor" || echo "$PR_TITLE" | grep -iq "feature\|minor\|feat"; then
+          NEW_VERSION="v$MAJOR.$((MINOR + 1)).0"
+        else
+          NEW_VERSION="v$MAJOR.$MINOR.$((PATCH + 1))"
+        fi
+
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "New version: $NEW_VERSION"
+
+    - name: Update README.md
+      id: update_readme
+      run: |
+        # Get PR information
+        PR_NUMBER="${{ github.event.pull_request.number }}"
+        PR_TITLE="${{ github.event.pull_request.title }}"
+        PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+        PR_URL="${{ github.event.pull_request.html_url }}"
+        NEW_VERSION="${{ steps.version_bump.outputs.new_version }}"
+        MERGE_DATE=$(date '+%Y-%m-%d')
+
+        # Create or update changelog section in README.md
+        if [ ! -f README.md ]; then
+          cat > README.md << 'EOF'
+        # DevOps & SRE Interview Preparation
+
+        This repository contains comprehensive resources for DevOps and SRE interview preparation.
+
+        ## Recent Updates
+
+        EOF
+        fi
+
+        # Check if changelog section exists
+        if ! grep -q "## Recent Updates" README.md; then
+          # Add changelog section before the end of file
+          echo -e "\n## Recent Updates\n" >> README.md
+        fi
+
+        # Create temporary file for new content
+        TEMP_FILE=$(mktemp)
+
+        # Add new entry to changelog
+        NEW_ENTRY="- **$NEW_VERSION** ($MERGE_DATE): $PR_TITLE - [PR#$PR_NUMBER]($PR_URL) by @$PR_AUTHOR"
+
+        # Process README.md
+        while IFS= read -r line; do
+          echo "$line" >> "$TEMP_FILE"
+          if [[ "$line" == "## Recent Updates" ]]; then
+            echo "" >> "$TEMP_FILE"
+            echo "$NEW_ENTRY" >> "$TEMP_FILE"
+          fi
+        done < README.md
+
+        # Replace original file
+        mv "$TEMP_FILE" README.md
+
+        # Update version badge if it exists
+        if grep -q "version-" README.md; then
+          sed -i "s/version-[^-]*-/version-${NEW_VERSION#v}-/" README.md
+        else
+          # Add version badge at the top
+          sed -i '1i![Version](https://img.shields.io/badge/version-'${NEW_VERSION#v}'-blue.svg)\n' README.md
+        fi
+
+        echo "README.md updated with version $NEW_VERSION"
+
+    - name: Create and push tag
+      run: |
+        NEW_VERSION="${{ steps.version_bump.outputs.new_version }}"
+        git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION - Merged PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
+        git push origin "$NEW_VERSION"
+
+    - name: Commit and push changes
+      run: |
+        git add README.md
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "chore: update README.md for release ${{ steps.version_bump.outputs.new_version }} [skip ci]"
+          git push origin main
+        fi
+
+    - name: Create GitHub Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.version_bump.outputs.new_version }}
+        release_name: Release ${{ steps.version_bump.outputs.new_version }}
+        body: |
+          ## Changes in this release
+
+          **Merged PR:** ${{ github.event.pull_request.title }} (#${{ github.event.pull_request.number }})
+          **Author:** @${{ github.event.pull_request.user.login }}
+
+          ### What's Changed
+          ${{ github.event.pull_request.body }}
+
+          **Full Changelog:** https://github.com/${{ github.repository }}/compare/${{ steps.current_version.outputs.latest_tag }}...${{ steps.version_bump.outputs.new_version }}
+        draft: false
+        prerelease: false
+
+  # Additional job to enforce PR review requirements
+  pr-validation:
+    if: github.event.pull_request.merged == false && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Validate PR
+      run: |
+        echo "PR opened for review: ${{ github.event.pull_request.title }}"
+        echo "Author: ${{ github.event.pull_request.user.login }}"
+        echo "Target branch: ${{ github.event.pull_request.base.ref }}"
